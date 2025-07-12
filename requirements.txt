@@ -1,6 +1,8 @@
 # Core
 langgraph
 langchain
+langchain-community
+langchain-huggingface
 langsmith
 python-dotenv
 

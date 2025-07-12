@@ -3,10 +3,11 @@
 import os
 from dotenv import load_dotenv
 from graph.debate_graph import build_debate_graph
-from langsmith.run_trees import RunTreeConfig
+from langsmith import traceable
 
 load_dotenv()
 
+@traceable(name="DebateGPT - Main")
 def main():
     topic = os.getenv("DEBATE_TOPIC", "AI will replace most jobs")
 
@@ -23,13 +24,7 @@ def main():
 
     app = build_debate_graph()
 
-    config = RunTreeConfig(
-        name=f"Debate: {topic}",
-        project_name="debategpt",
-        tags=["AAIDC-M2", "langgraph", "multi-agent"]
-    )
-
-    final_state = app.invoke(initial_state, config=config)
+    final_state = app.invoke(initial_state)
 
     print("\nDebate Complete!")
     print("=" * 60)

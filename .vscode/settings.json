@@ -7,9 +7,12 @@
         "langchain",
         "langgraph",
         "langsmith",
+        "mistralai",
         "pycache",
         "pytest",
+        "Strawman",
         "STREAMLIT",
-        "tavily"
+        "tavily",
+        "tiiuae"
     ]
 }

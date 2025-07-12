@@ -13,7 +13,7 @@ install:
 	$(PIP) install -r requirements.txt
 
 run:
-	$(PYTHON) $(APP)
+	. my_env/bin/activate && python app.py
 
 ui:
 	streamlit run $(STREAMLIT_APP)
