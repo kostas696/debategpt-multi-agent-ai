@@ -1,0 +1,11 @@
+langchain
+langgraph
+langsmith
+python-dotenv
+tavily-python
+huggingface_hub
+transformers
+torch
+pytest
+streamlit
+ruff
