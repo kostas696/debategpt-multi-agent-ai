@@ -1,11 +1,21 @@
-langchain
+# Core
 langgraph
+langchain
 langsmith
 python-dotenv
-tavily-python
+
+# LLM integration
 huggingface_hub
 transformers
 torch
-pytest
+
+# Tools & Retrieval
+tavily-python
+
+# Web UI
 streamlit
+
+# Testing & Quality
+pytest
 ruff
+black
