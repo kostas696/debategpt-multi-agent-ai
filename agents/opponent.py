@@ -1,59 +1,48 @@
 import os
+import traceback
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
-from huggingface_hub.inference._client import InferenceClient
-from tools.persona_prompt_tool import get_persona_prompt
-from tools.tavily_search_tool import tavily_tool
+from langsmith import traceable
 
-llm = ChatHuggingFace(
-    llm=HuggingFaceEndpoint(
-        repo_id=os.getenv("LLM_MODEL", "google/flan-t5-base"),
-        task="text-generation",
-        max_new_tokens=128,
-        do_sample=True,
-        temperature=0.7,
-        model_kwargs={"stream": False},
-        client=InferenceClient(timeout=60)        
-    )
-)
+from tools.persona_prompt_node import PersonaPromptTool
+from tools.tavily_search_node import TavilySearchTool
 
-persona_instruction = get_persona_prompt("opponent")
+from light_llm import load_llm
+from utils.truncate_prompt import truncate_prompt
+from utils.prompt_utils import get_opponent_prompt
+from light_llm import load_llm
 
-def opponent_node(state: dict) -> dict:
-    topic = state.get("topic", "AI will replace most jobs")
-    turn = state.get("turn_count", 0)
-    last_history = state.get("history", [])
+# -- LLM setup --
+llm = load_llm()
 
-    proponent_argument = ""
-    for msg in reversed(last_history):
-        if isinstance(msg, AIMessage):
-            proponent_argument = msg.content
-            break
+# -- ToolNode Instances --
+persona_tool = PersonaPromptTool()
+tavily_tool = TavilySearchTool()
 
-    evidence = tavily_tool(f"Counter arguments to: {topic}")
-
-    prompt = (
-        f"{persona_instruction}\n\n"
-        f"Debate Topic: {topic}\n\n"
-        f"Your opponent argued: \"{proponent_argument}\"\n\n"
-        f"Please rebut their claim with counterarguments, evidence, and reasoning.\n\n"
-        f"{evidence}"
-        f"Keep your answer concise and under 100 words."
-    )
-
-    messages = [HumanMessage(content=prompt)]
+@traceable(name="OpponentNode")
+def opponent_node(state):
+    topic = state.topic
+    turn = state.turn_count
+    print(f"[Opponent] Running Turn: {turn}")
 
     try:
-        response = llm.invoke(messages)
+        persona_prompt = persona_tool.invoke({"agent_role": "opponent"})["persona_prompt"]
+        evidence = tavily_tool.invoke({"query": f"Counter-arguments against: {topic}"})["evidence"]
+
+        prompt = get_opponent_prompt(topic)
+        full_prompt = f"{persona_prompt}\n\n{prompt}\n\n{evidence}"
+        full_prompt = truncate_prompt(full_prompt)
+
+        response = llm.invoke([HumanMessage(content=full_prompt)])
+
+        if not response or not hasattr(response, "content"):
+            raise ValueError("Empty or invalid response from LLM")
+
+        state.history += [HumanMessage(content=full_prompt), AIMessage(content=response.content)]
+        state.last_speaker = "opponent"
+        state.turn_count = turn + 1
+        return state
+
     except Exception as e:
-        print(f"Error in Opponent Node: {e}")
-        return {**state, "error": str(e)}
-
-    new_history = last_history + [messages[0], response]
-
-    return {
-        **state,
-        "history": new_history,
-        "last_speaker": "opponent",
-        "turn_count": turn + 1,
-    }
+        print(f"[Opponent Node] Exception:\n{traceback.format_exc()}")
+        state.error = str(e)
+        return state

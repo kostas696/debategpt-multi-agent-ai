@@ -1,80 +1,83 @@
-import os
+import traceback
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
-from huggingface_hub.inference._client import InferenceClient
-from tools.persona_prompt_tool import get_persona_prompt
-from tools.fallacy_detector import detect_fallacies
-
-MAX_TURNS = 4  # Total debate rounds before verdict
-
-llm = ChatHuggingFace(
-    llm=HuggingFaceEndpoint(
-        repo_id=os.getenv("LLM_MODEL", "google/flan-t5-base"),
-        task="text-generation",
-        max_new_tokens=128,
-        do_sample=True,
-        temperature=0.7,
-        model_kwargs={"stream": False},
-        client=InferenceClient(timeout=60)
-    )
+from langsmith import traceable
+from state.debate_state import DebateState
+from tools.persona_prompt_node import PersonaPromptTool
+from tools.fallacy_detector_node import FallacyDetectorTool
+from light_llm import load_llm
+from utils.truncate_prompt import truncate_prompt
+from utils.prompt_utils import (
+    get_moderator_summary_prompt,
+    get_moderator_verdict_prompt,
 )
 
-# Load persona prompt for moderator
-persona_instruction = get_persona_prompt("moderator")
+MAX_TURNS = 4
 
-def moderator_node(state: dict) -> dict:
-    topic = state.get("topic", "AI will replace most jobs")
-    turn = state.get("turn_count", 0)
-    history = state.get("history", [])
+# -- LLM setup --
+llm = load_llm()
 
-    # Get last two AI messages (Proponent + Opponent)
+# -- Tool setup --
+persona_tool = PersonaPromptTool()
+fallacy_tool = FallacyDetectorTool()
+
+@traceable(name="ModeratorNode")
+def moderator_node(state: DebateState):
+    topic = state.topic
+    turn = state.turn_count
+    print(f"[Moderator] Running Turn: {turn}")
+
+    history = state.history
     last_turn = [msg for msg in reversed(history) if isinstance(msg, AIMessage)][:2]
+
     if len(last_turn) < 2:
-        return state  
+        print("[Moderator] Not enough AI responses to moderate.")
+        return state
 
-    summary_input = (
-        f"{persona_instruction}\n\n"
-        f"Debate Topic: {topic}\n\n"
-        f"Latest arguments:\n\n"
-        f"Proponent:\n{last_turn[1].content}\n\n"
-        f"Opponent:\n{last_turn[0].content}\n\n"
-        f"Please summarize this round fairly in less than 80 words. Also detect logical fallacies briefly."
-    )
+    try:
+        # -- Tool invocations --
+        persona_prompt = persona_tool.invoke({"agent_role": "moderator"})["persona_prompt"]
+        fallacies = fallacy_tool.invoke({
+            "text": last_turn[0].content + "\n" + last_turn[1].content
+        })["fallacies"]
 
-    response = llm.invoke([HumanMessage(content=summary_input)])
-    summary = response.content
-
-    # Detect fallacies (if any)
-    fallacies = detect_fallacies(last_turn[0].content + "\n" + last_turn[1].content)
-
-    final_output = summary
-    if fallacies:
-        final_output += f"\n\nDetected Logical Fallacies:\n{fallacies}"
-
-    new_history = history + [HumanMessage(content=summary_input), AIMessage(content=final_output)]
-
-    # Return verdict if debate is over
-    if turn >= MAX_TURNS:
-        verdict_prompt = (
-            f"{persona_instruction}\n\n"
-            f"Debate Topic: {topic}\n\n"
-            f"Based on the full debate transcript, who presented a stronger case and why?\n\n"
-            f"Provide a verdict with reasoning. Keep answer under 100 words."
+        # -- Summary Prompt --
+        summary_prompt = get_moderator_summary_prompt(
+            topic=topic,
+            proponent=last_turn[1].content,
+            opponent=last_turn[0].content,
+            persona=persona_prompt,
+            fallacies=fallacies,
         )
-        verdict_response = llm.invoke([HumanMessage(content=verdict_prompt)])
-        new_history.append(verdict_response)
 
-        return {
-            **state,
-            "history": new_history,
-            "verdict": verdict_response.content
-        }
+        summary_prompt = truncate_prompt(summary_prompt)
+        response = llm.invoke(summary_prompt)
+        content = getattr(response, "content", "").strip()
+        if not content:
+            raise ValueError("Empty response from LLM")
 
-    return {
-        **state,
-        "history": new_history
-    }
+        state.history += [HumanMessage(content=summary_prompt), AIMessage(content=content)]
 
-# Conditional router for LangGraph
-def should_continue(state: dict) -> str:
-    return "end" if state.get("turn_count", 0) >= MAX_TURNS else "continue"
+        # -- Verdict (if final round) --
+        if turn >= MAX_TURNS:
+            verdict_prompt = get_moderator_verdict_prompt(topic=topic, persona=persona_prompt)
+            verdict_prompt = truncate_prompt(verdict_prompt)
+            verdict_response = llm.invoke(verdict_prompt)
+            verdict_content = getattr(verdict_response, "content", "").strip()
+            state.verdict = verdict_content
+            state.history += [HumanMessage(content=verdict_prompt), AIMessage(content=verdict_content)]
+
+        return state
+
+    except Exception as e:
+        print(f"[Moderator Node] Exception:\n{traceback.format_exc()}")
+        state.error = str(e)
+        return state
+
+
+def should_continue(state: DebateState) -> str:
+    print(f"[Router] Turn: {state.turn_count} → ", end="")
+    if state.turn_count >= MAX_TURNS:
+        print("ENDING debate.")
+        return "end"
+    print("Continuing debate.")
+    return "continue"

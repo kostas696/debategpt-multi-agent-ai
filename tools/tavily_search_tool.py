@@ -22,7 +22,7 @@ def tavily_tool(query: str, max_results: int = 3) -> str:
             return "No relevant results found."
 
         evidence = "\n".join(
-            f"📎 {item['title']} - {item['url']}\n{item['content']}\n"
+            f"{item['title']} - {item['url']}\n{item['content']}\n"
             for item in results["results"]
         )
         return f"Relevant research and sources:\n\n{evidence}"

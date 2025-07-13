@@ -1,10 +1,13 @@
-from typing import List, Literal, Optional, TypedDict, Union
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from dataclasses import dataclass, field
+from typing import List, Optional, Literal
+from langchain_core.messages import BaseMessage
 
-
-class DebateState(TypedDict, total=False):
-    topic: str
-    history: List[BaseMessage]
-    turn_count: int
-    last_speaker: Literal["proponent", "opponent"]
-    verdict: Optional[str]
+@dataclass
+class DebateState:
+    topic: str = "AI will replace most jobs"
+    history: List[BaseMessage] = field(default_factory=list)
+    turn_count: int = 0
+    last_speaker: Optional[Literal["proponent", "opponent"]] = None
+    verdict: Optional[str] = None
+    error: Optional[str] = None  
+    debug_log: List[str] = field(default_factory=list)  
